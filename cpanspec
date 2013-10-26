@@ -49,6 +49,7 @@ cpanget [options] [module [...]]
    --follow             Process build dependencies
    --filter-requires    Specify Requires to remove
    --filter-provides    Specify Provides to remove
+   --build-prefix       Add a Prefix to the specfile
    --add-requires       Add Requires for this item
    --add-provides       Add Provides for this item
    --add-buildrequires  Add BuildRequires for this item
@@ -195,6 +196,10 @@ Specify Requires to remove.
 
 Specify Provides to remove.
 
+=item B<--build-prefix>
+
+Add a Prefix to the specfile for relocating this package.
+
 =item B<--add-requires>
 
 Add Requires for this item.
@@ -263,6 +268,7 @@ our $verbose=0;
 our $follow=0;
 our $macros=0;
 our $source;
+our $buildprefix;
 our $cpan=$ENV{'CPAN'} || "http://www.cpan.org";
 
 our $home=$ENV{'HOME'} || (getpwuid($<))[7];
@@ -590,6 +596,7 @@ GetOptions(
         'follow'            => \$follow,
         'filter-requires=s' => \@filter_requires,
         'filter-provides=s' => \@filter_provides,
+        'build-prefix=s'    => \$buildprefix,
         'add-requires=s'    => \@add_requires,
         'add-provides=s'    => \@add_provides,
         'add-buildrequires=s' => \@add_buildrequires,
@@ -1068,6 +1075,27 @@ for my $file (@args) {
         }
     }
 
+    if (defined($buildprefix)) {
+            print $spec <<END;
+\%global _prefix         $buildprefix
+\%global _exec_prefix    \%{_prefix}
+\%global _bindir         \%{_exec_prefix}/bin
+\%global _sbindir        \%{_exec_prefix}/sbin
+\%global _libexecdir     \%{_exec_prefix}/libexec
+\%global _datadir        \%{_prefix}/share
+\%global _sysconfdir     \%{_prefix}/etc
+\%global _sharedstatedir \%{_prefix}/com
+\%global _localstatedir  \%{_prefix}/var
+\%global _libdir         \%{_exec_prefix}/\%{_lib}
+\%global _includedir     \%{_prefix}/include
+\%global _infodir        \%{_datadir}/info
+\%global _mandir         \%{_datadir}/man
+\%global _docdir         \%{_datadir}/doc
+\%global _defaultdocdir  \%{_docdir}
+\%global perl_$vendorlib \%(eval "`\%{__perl} -V:install$vendorlib`"; echo \$install$vendorlib | \%{__sed} -r "s#\%{_usr}#\%{_prefix}#")
+END
+    }
+
     print $spec <<END;
 Name:           $prefix$name
 Version:        $version
@@ -1085,6 +1113,7 @@ Source0:        $source
 BuildRoot:      \%{_tmppath}/\%{name}-\%{version}-\%{release}-root-\%(\%{__id_u} -n)
 END
 
+    print $spec "Prefix:         \%{_prefix}\n" if (defined($buildprefix));
     printf $spec "%-16s%s\n", "BuildArch:", "noarch" if ($noarch);
 
     if (defined($requires{perl})) {
@@ -1214,12 +1243,12 @@ END
 
     if ($usebuildpl) {
         print $spec <<END;
-\%{__perl} Build.PL installdirs=vendor@{[$noarch ? '' : qq{ optimize="$macro{optimize}"} ]}
+\%{__perl} Build.PL installdirs=vendor@{[$noarch ? '' : qq{ optimize="$macro{optimize}"}, $buildprefix ? qq{--prefix \%{_prefix}} : '' ]}
 ./Build
 END
     } else {
         print $spec <<END;
-\%{__perl} Makefile.PL INSTALLDIRS=vendor@{[$noarch ? '' : qq{ OPTIMIZE="$macro{optimize}"}]}
+\%{__perl} Makefile.PL INSTALLDIRS=vendor@{[$noarch ? '' : qq{ OPTIMIZE="$macro{optimize}"}, $buildprefix ? qq{PREFIX=\%{_prefix}} : '']}
 END
 
         print $spec
