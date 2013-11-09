@@ -50,6 +50,7 @@ cpanget [options] [module [...]]
    --filter-requires    Specify Requires to remove
    --filter-provides    Specify Provides to remove
    --build-prefix       Add a Prefix to the specfile
+   --build-order-file   Print the optimal build order to a file
    --add-requires       Add Requires for this item
    --add-provides       Add Provides for this item
    --add-buildrequires  Add BuildRequires for this item
@@ -269,6 +270,7 @@ our $follow=0;
 our $macros=0;
 our $source;
 our $buildprefix;
+our $build_order_file;
 our $cpan=$ENV{'CPAN'} || "http://www.cpan.org";
 
 our $home=$ENV{'HOME'} || (getpwuid($<))[7];
@@ -304,6 +306,9 @@ my @MACROS = (
 
 # this is set after the parameters are passed
 our %macro;
+
+our %dependencies;
+our @build_order;
 
 our %dep_blacklist = (
     'Win32' => 1,               # We're not on win32
@@ -556,10 +561,30 @@ sub check_repo($) {
     return grep { /^\S+-[^-]+-[^-]+$/ } @out;
 }
 
-sub check_dep($) {
+sub check_dep($$) {
     my $module=shift;
+    my $version=shift;
+    my $check = $version ? sprintf("perl(%s) >= %s", $module, $version) : sprintf("perl(%s)", $module);
 
-    return (check_rpm("perl($module)") || check_repo("perl($module)"));
+    return (check_rpm($check) || check_repo($check));
+}
+
+sub calc_deps {
+    my $module = shift;
+
+    if(defined($dependencies{$module}->{has_deps})) {
+        foreach my $dep (@{$dependencies{$module}->{has_deps}}) {
+            calc_deps($dep) if(defined($dependencies{$dep}));
+        }
+    }
+    push(@build_order, $dependencies{$module}->{self}) unless(grep(/^$dependencies{$module}->{self}$/, @build_order));
+}
+
+sub print_build_order {
+    my $fh = new FileHandle ">$build_order_file"
+               or die "Can't open build order file: $!";
+    print $fh join("\n", @build_order);
+    $fh->close();
 }
 
 sub which(@) {
@@ -704,6 +729,11 @@ for my $file (@args) {
 
     my $module=$name;
     $module=~s/-/::/g;
+    $dependencies{$module}->{self} = $module;
+    if($orig ne $module) {
+        $dependencies{$orig} = $dependencies{$module};
+        push(@{$dependencies{$module}->{alias}}, $orig);
+    }
 
     my $archive;
     my $path;
@@ -1076,7 +1106,7 @@ for my $file (@args) {
     }
 
     if (defined($buildprefix)) {
-            print $spec <<END;
+        print $spec <<END;
 \%global _prefix         $buildprefix
 \%global _exec_prefix    \%{_prefix}
 \%global _bindir         \%{_exec_prefix}/bin
@@ -1139,12 +1169,17 @@ END
             next if (!$compat);
         } elsif ($follow) {
             if ($dep ne $module and !(grep { $_ eq $dep } @processed, @args)) {
-                if (check_dep($dep)) {
+                if (check_dep($dep, $build_requires{$dep})) {
                     verbose("$dep is available, skipping.");
                 } else {
                     verbose("$dep is not available, adding it to the list.");
                     push(@args, $dep);
                 }
+            }
+            if(defined($dependencies{$module}->{has_deps})) {
+                push(@{$dependencies{$module}->{has_deps}}, $dep);
+            } else {
+                $dependencies{$module}->{has_deps} = [$dep];
             }
         }
         printf $spec "%-16s%s", "BuildRequires:", "perl($dep)";
@@ -1346,6 +1381,17 @@ END
     build_rpm($specfile) if ($buildsrpm or $buildrpm);
 
     push(@processed, $module);
+}
+
+if($build_order_file) {
+    verbose("Calculating dependencies for build order file...");
+
+    foreach my $module (keys(%dependencies)) {
+        calc_deps($module);
+    }
+
+    verbose("Generating build order file...");
+    print_build_order() if($build_order_file);
 }
 
 # vi: set ai et:
