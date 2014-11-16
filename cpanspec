@@ -889,6 +889,7 @@ for my $file (@args) {
         }
         die "Failed to create $script: $!\n" if (!$sh);
 
+        map { s/\//\\\//g } @filter_requires;
         print $sh "#!/bin/sh\n\n"
             . "\@\@PERL_REQ\@\@ \"\$\@\" | sed -e '/^$filter_requires[0]\$/d'";
         if (@filter_requires > 1) {
@@ -911,6 +912,7 @@ for my $file (@args) {
         }
         die "Failed to create $script: $!\n" if (!$sh);
 
+        map { s/\//\\\//g } @filter_provides;
         print $sh "#!/bin/sh\n\n"
             . "\@\@PERL_PROV\@\@ \"\$\@\" | sed -e '/^$filter_provides[0]\$/d'";
         if (@filter_provides > 1) {
@@ -1308,7 +1310,7 @@ END
 
     if ($usebuildpl) {
         print $spec <<END;
-\%{__perl} Build.PL installdirs=vendor@{[$noarch ? '' : qq{ optimize="$macro{optimize}"}, $buildprefix ? qq{--prefix \%{_prefix}} : '' ]}
+\%{__perl} Build.PL --installdirs=vendor@{[$noarch ? '' : qq{ --optimize="$macro{optimize}"} , $buildprefix ? qq{--prefix \%{_prefix}} : '' ]}
 ./Build
 END
     } else {
@@ -1334,7 +1336,7 @@ END
 
     if ($usebuildpl) {
         print $spec
-            "./Build install destdir=$macro{buildroot} create_packlist=0\n";
+            "./Build install --destdir=$macro{buildroot} --create_packlist=0\n";
     } else {
         print $spec <<END;
 make pure_install PERL_INSTALL_ROOT=$macro{buildroot}
