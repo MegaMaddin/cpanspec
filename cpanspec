@@ -54,6 +54,7 @@ cpanget [options] [module [...]]
    --add-requires       Add Requires for this item
    --add-provides       Add Provides for this item
    --add-buildrequires  Add BuildRequires for this item
+   --no-tests           Don't add %check rpm macro to spec
    --version            Print the version number and exit
 
 The modules specified on the command line can be either filenames of tarballs,
@@ -213,6 +214,12 @@ Add Provides for this item.
 
 Add BuildRequires for this item.
 
+=item B<--no-tests>
+
+Don't add rpm %check macro to the specfile.
+CAUTION - this could be dangerous and should just
+be used if you know what you're doing
+
 =item B<--version>
 
 Print the version number and exit.
@@ -231,6 +238,7 @@ L<perl(1)>, L<cpan2rpm(1)>, L<cpanflute2(1)>
 
 use strict;
 use warnings;
+use v5.10;
 
 use FileHandle;
 use Archive::Tar;
@@ -268,6 +276,7 @@ our $buildrpm=0;
 our $verbose=0;
 our $follow=0;
 our $macros=0;
+our $no_tests=0;
 our $source;
 our $buildprefix;
 our $build_order_file;
@@ -309,6 +318,7 @@ our %macro;
 
 our %dependencies;
 our @build_order;
+our %build_hash;
 
 our %dep_blacklist = (
     'Win32' => 1,               # We're not on win32
@@ -317,6 +327,7 @@ our %dep_blacklist = (
     'ok' => 1,                  # Side effect of Test::use::ok
     'BaseClass' => 1,           # Common test class shipped by ourselves
     'TestServer' => 1,          # Likewise
+    'module' => 1,              # Module::ExtractUse
 );
 
 sub print_version {
@@ -532,6 +543,11 @@ sub get_description(%) {
 
 sub check_rpm($) {
     my $dep=shift;
+    state %rpm_dep;
+
+    if(exists($rpm_dep{$dep})) {
+        return(@{$rpm_dep{$dep}});
+    }
 
     my $rpm=which("rpm");
 
@@ -542,11 +558,18 @@ sub check_rpm($) {
         return undef;
     }
 
+    $rpm_dep{$dep} = [@out];
+
     return @out;
 }
 
 sub check_repo($) {
     my $dep=shift;
+    state %repo_dep;
+
+    if(exists($repo_dep{$dep})) {
+        return(@{$repo_dep{$dep}});
+    }
 
     my $repoquery=which("repoquery");
 
@@ -558,7 +581,9 @@ sub check_repo($) {
         return undef;
     }
 
-    return grep { /^\S+-[^-]+-[^-]+$/ } @out;
+    $repo_dep{$dep} = [grep {/^\S+-[^-]+-[^-]+$/} @out];
+
+    return @{$repo_dep{$dep}};
 }
 
 sub check_dep($$) {
@@ -574,10 +599,11 @@ sub calc_deps {
 
     if(defined($dependencies{$module}->{has_deps})) {
         foreach my $dep (@{$dependencies{$module}->{has_deps}}) {
-            calc_deps($dep) if(defined($dependencies{$dep}));
+            calc_deps($dep) if(defined($dependencies{$dep}) && !exists($build_hash{$dep}));
         }
     }
-    push(@build_order, $dependencies{$module}->{self}) unless(grep(/^$dependencies{$module}->{self}$/, @build_order));
+    push(@build_order, $dependencies{$module}->{self}) unless(exists($build_hash{$dependencies{$module}->{self}}));
+    $build_hash{$dependencies{$module}->{self}} = 1;
 }
 
 sub print_build_order {
@@ -622,9 +648,11 @@ GetOptions(
         'filter-requires=s' => \@filter_requires,
         'filter-provides=s' => \@filter_provides,
         'build-prefix=s'    => \$buildprefix,
+        'build-order-file=s'=> \$build_order_file,
         'add-requires=s'    => \@add_requires,
         'add-provides=s'    => \@add_provides,
         'add-buildrequires=s' => \@add_buildrequires,
+        'no-tests'          => \$no_tests,
         'version'           => \&print_version,
         'prefer-macros|m'   => \$macros,
     ) or pod2usage({ -exitval => 1, -verbose => 0 });
@@ -673,7 +701,7 @@ else {
 }
 
 my @args=@ARGV;
-my @processed=();
+my %processed = map {$_ => 1} @args;
 
 update_packages();
 $packages=Parse::CPAN::Packages->new($pkgdetails)
@@ -683,6 +711,7 @@ die "Parse::CPAN::Packages->new() failed: $!\n"
 
 for my $file (@args) {
     my ($name,$version,$type);
+    my $orig = $file;
 
     if ($file =~ /^(?:.*\/)?(.*)-(?:v\.?)?([^-]+)\.(tar)\.(?:gz|bz2)$/) {
         $name=$1;
@@ -1168,7 +1197,7 @@ END
         if (exists($corelist{$dep}) && $corelist{$dep} ge $build_requires{$dep}) {
             next if (!$compat);
         } elsif ($follow) {
-            if ($dep ne $module and !(grep { $_ eq $dep } @processed, @args)) {
+            if ($dep ne $module and !exists($processed{$dep})) {
                 if (check_dep($dep, $build_requires{$dep})) {
                     verbose("$dep is available, skipping.");
                 } else {
@@ -1203,6 +1232,7 @@ END
         printf $spec "%-16s%s\n", "Requires:", $dep;
     }
 
+#XXX
     if (!$compat) {
         print $spec <<END;
 Requires:       perl(:MODULE_COMPAT_\%(eval "`\%{__perl} -V:version`"; echo \$version))
@@ -1336,13 +1366,15 @@ END
         push(@doc, "COPYING", "Artistic");
     }
 
-    print $spec <<END;
+    unless($no_tests) {
+        print $spec <<END;
 \%check@{[($compat ? ' || :' : '')]}
 END
-    if ($usebuildpl) {
-        print $spec "./Build test\n";
-    } else {
-        print $spec "make test\n";
+        if ($usebuildpl) {
+            print $spec "./Build test\n";
+        } else {
+            print $spec "make test\n";
+        }
     }
 
     print $spec <<END;
@@ -1380,7 +1412,7 @@ END
 
     build_rpm($specfile) if ($buildsrpm or $buildrpm);
 
-    push(@processed, $module);
+    $processed{$module} = 1;
 }
 
 if($build_order_file) {
