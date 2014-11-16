@@ -1310,12 +1310,12 @@ END
 
     if ($usebuildpl) {
         print $spec <<END;
-\%{__perl} Build.PL --installdirs=vendor@{[$noarch ? '' : qq{ --optimize="$macro{optimize}"} , $buildprefix ? qq{--prefix \%{_prefix}} : '' ]}
+\%{__perl} Build.PL --installdirs=vendor@{[$noarch ? '' : qq{ --optimize="$macro{optimize}"} , $buildprefix ? qq{ --prefix \%{_prefix}} : '' ]}
 ./Build
 END
     } else {
         print $spec <<END;
-\%{__perl} Makefile.PL INSTALLDIRS=vendor@{[$noarch ? '' : qq{ OPTIMIZE="$macro{optimize}"}, $buildprefix ? qq{PREFIX=\%{_prefix}} : '']}
+\%{__perl} Makefile.PL INSTALLDIRS=vendor@{[$noarch ? '' : qq{ OPTIMIZE="$macro{optimize}"}, $buildprefix ? qq{ PREFIX=\%{_prefix}} : '']}
 END
 
         print $spec
